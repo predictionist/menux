@@ -1,41 +1,52 @@
 --[[
-    Ketamine UI Library  v1.0.0
+    Ketamine UI Library  v1.1.0
     ------------------------------------------------------------------
-    local Library = loadstring(readfile("Ketamine/Library.lua"))()
+    local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/YOU/REPO/main/Library.lua"))()
 
-    local Window  = Library:CreateWindow({
+    local Window = Library:CreateWindow({
         Name      = "Ketamine",
-        Scale     = 1.25,                    -- 1 = 555x344, 1.25 = 694x430
-        TextSize  = 11,                      -- base text size (scaled by Scale)
-        Accent    = Color3.fromRGB(125, 129, 172),
+        Scale     = 1.25,                     -- 1 = 555x344, 1.25 = 694x430
+        TextSize  = 11,
         ToggleKey = Enum.KeyCode.RightShift,
-        Preview   = true,                    -- character preview next to the window
+        Preview   = true,                     -- character preview next to the window
+        Theme     = { Accent = Color3.fromRGB(125, 129, 172) },   -- optional overrides
     })
 
     local Tab     = Window:AddTab("Combat")
-    local Section = Tab:AddSection("Aimbot", "Left")        -- "Left" | "Right" [, height]
+    local Section = Tab:AddSection("Aimbot", "Left")              -- "Left" | "Right" [, height]
     Section:AddToggle({ Text = "Enabled", Flag = "aim", Default = true, Callback = function(v) end })
+    local Sub     = Tab:AddSection("Settings", "Right"):AddSubTab("One")   -- sections with sub-tabs
 
-    local Sub = Tab:AddSection("Settings", "Right"):AddSubTab("One")   -- sections with sub-tabs
-    Sub:AddSlider({ Text = "FOV", Min = 0, Max = 360, Default = 90, Suffix = "°", Flag = "fov" })
+    -- ready-made settings tab: menu key, theme colour pickers, unload button, config system
+    Window:AddSettingsTab("Settings")
 
-    Widgets (Section / SubTab):
-        :AddToggle     { Text, Flag, Default, Callback }
-        :AddSlider     { Text, Flag, Min, Max, Default, Increment, Suffix, Callback }
-        :AddDropdown   { Text, Flag, Options, Default, Callback }        -> :SetOptions(list)
-        :AddInput      { Text, Flag, Default, Placeholder, Callback(text, enterPressed) }
-        :AddKeybind    { Text, Flag, Default (KeyCode), Callback, Changed(key) }
-        :AddColorPicker{ Text, Flag, Default (Color3), Callback }
-        :AddButton     { Text, Callback }
-        :AddLabel      "text"                                            -> :SetText(str)
-    Every widget returns an object with :Get() / :Set(v) (where it makes sense) and is
-    stored in Library.Options[Flag]; current values live in Library.Flags[Flag].
+    WIDGETS  (Section / SubTab)
+        :AddToggle      { Text, Flag, Default, Callback }
+        :AddSlider      { Text, Flag, Min, Max, Default, Increment, Suffix, Callback }
+        :AddDropdown    { Text, Flag, Options, Default, Callback }       -> :SetOptions(list)
+        :AddListBox     { Text, Flag, Items, Rows, Default, Callback }   -> :SetItems(list)
+        :AddInput       { Text, Flag, Default, Placeholder, Callback(text, enterPressed) }
+        :AddKeybind     { Text, Flag, Default (KeyCode), Callback, Changed(key) }
+        :AddColorPicker { Text, Flag, Default (Color3), Callback }
+        :AddButton      { Text, Callback }
+        :AddButtonRow   { {Text, Callback}, {Text, Callback}, ... }      -- buttons side by side
+        :AddLabel       "text"                                           -> :SetText(str)
+      ready-made blocks:
+        :AddConfigSystem()   name input + config list + create/load/overwrite/delete/refresh/autoload
+        :AddThemePickers()   colour pickers for Accent / Background / Panel / Field / Text / Outline
+        :AddMenuKeybind(text)
+        :AddUnloadButton(text)
 
-    Window:SetVisible(bool)  Window:Toggle()  Window:Destroy()
-    Library:SaveConfig(name)  Library:LoadConfig(name)  Library:Unload()
+    LIBRARY
+        Library.Flags[flag]   current values        Library.Options[flag]  widget objects (:Get/:Set)
+        Library:SetTheme(name, Color3)   Library:GetTheme(name)   (Accent, Background, Panel, Field, Text, Outline)
+        Library:SaveConfig(n) :LoadConfig(n) :DeleteConfig(n) :ListConfigs()
+        Library:SetAutoload(n) :LoadAutoload()
+        Library:OnUnload(fn)  Library:Unload()
+        Window:SetVisible(b)  Window:Toggle()  Window:Destroy()
 ]]
 
-local Library = { Flags = {}, Options = {}, Version = "1.0.0" }
+local Library = { Flags = {}, Options = {}, Version = "1.1.0", ConfigFolder = "Ketamine/Configs" }
 local Flags, Options = Library.Flags, Library.Options
 
 -- ============================================================
@@ -56,17 +67,17 @@ local GuiParent = (gethui and gethui())
 local GUI_NAME = "KetamineUI"
 
 -- ============================================================
--- STATE (set by CreateWindow)
+-- STATE
 -- ============================================================
-local SCALE, TEXT_BASE = 1.25, 11
-local TEXT_SIZE = 14
+local SCALE, TEXT_BASE, TEXT_SIZE = 1.25, 11, 14
 local function s(n) return math.floor(n * SCALE + 0.5) end
 
-local Conns = {}                      -- every service connection, disconnected on Unload
+local Conns = {}                       -- service connections, disconnected on Unload
 local function track(c) Conns[#Conns + 1] = c; return c end
 
+local UnloadCallbacks = {}
 local Screen, WindowObj = nil, nil
-local isListening = false             -- true while a keybind waits for a key
+local isListening = false              -- a keybind is waiting for a key
 
 -- ============================================================
 -- FONT (pixel Tahoma; falls back to SourceSans)
@@ -105,39 +116,78 @@ do
 end
 
 -- ============================================================
--- THEME
+-- THEME  (live: SetTheme recolours every widget)
 -- ============================================================
-local DEFAULT_ACCENT = Color3.fromRGB(125, 129, 172)
+local BLACK, WHITE = Color3.new(0, 0, 0), Color3.new(1, 1, 1)
 
-local C = {
-    Border    = Color3.fromRGB(4, 5, 12),
-    WinTop    = Color3.fromRGB(31, 31, 31),
-    WinBot    = Color3.fromRGB(24, 24, 24),
-    PanelTop  = Color3.fromRGB(40, 40, 40),
-    PanelBot  = Color3.fromRGB(24, 24, 24),
-    TabOff    = Color3.fromRGB(19, 19, 19),
-    Accent    = DEFAULT_ACCENT,
-    BoxOff    = Color3.fromRGB(18, 18, 18),
-    Field     = Color3.fromRGB(46, 46, 46),     -- toggle-off / input / dropdown box
-    BoxStroke = Color3.fromRGB(8, 8, 8),
-    Text      = Color3.fromRGB(230, 230, 230),
+local DEFAULT_THEME = {
+    Accent     = Color3.fromRGB(125, 129, 172),
+    Background = Color3.fromRGB(31, 31, 31),
+    Panel      = Color3.fromRGB(40, 40, 40),
+    Field      = Color3.fromRGB(46, 46, 46),
+    Text       = Color3.fromRGB(230, 230, 230),
+    Outline    = Color3.fromRGB(6, 6, 9),
 }
-local ACCENT_LIGHT, ACCENT_HOVER
+Library.ThemeNames = { "Accent", "Background", "Panel", "Field", "Text", "Outline" }
 
-local BTN_BG       = Color3.fromRGB(32, 32, 32)
-local BTN_HOVER    = Color3.fromRGB(42, 42, 42)
-local BTN_DOWN     = Color3.fromRGB(22, 22, 22)
-local DD_BG        = Color3.fromRGB(46, 46, 46)
-local DD_HOVER     = Color3.fromRGB(56, 56, 56)
-local DD_LIST      = Color3.fromRGB(40, 40, 40)
-local DD_ROW_HOVER = Color3.fromRGB(54, 54, 54)
+-- C holds the 6 base colours (Accent, WinTop, PanelTop, Field, Text, Border) + derived ones
+local C = {}
+local THEME_KEYS = {
+    Accent = "Accent", Background = "WinTop", Panel = "PanelTop",
+    Field = "Field", Text = "Text", Outline = "Border",
+}
 
--- layout (base px, measured from the screenshot)
+local function recompute()
+    C.WinBot       = C.WinTop:Lerp(BLACK, 0.226)
+    C.PanelBot     = C.PanelTop:Lerp(BLACK, 0.40)
+    C.TabOff       = C.WinTop:Lerp(BLACK, 0.387)
+    C.BoxOff       = C.WinTop:Lerp(BLACK, 0.42)
+    C.BoxStroke    = C.Border
+    C.AccentLight  = C.Accent:Lerp(WHITE, 0.25)
+    C.AccentHover  = C.Accent:Lerp(WHITE, 0.12)
+    C.AccentDim    = C.Accent:Lerp(BLACK, 0.14)
+    C.Button       = C.Field:Lerp(BLACK, 0.30)
+    C.ButtonHover  = C.Field:Lerp(BLACK, 0.09)
+    C.ButtonDown   = C.Field:Lerp(BLACK, 0.52)
+    C.FieldHover   = C.Field:Lerp(WHITE, 0.05)
+    C.FieldList    = C.Field:Lerp(BLACK, 0.13)
+    C.FieldRow     = C.Field:Lerp(WHITE, 0.04)
+end
+
+local function resetTheme(overrides)
+    for name, key in pairs(THEME_KEYS) do
+        C[key] = (overrides and overrides[name]) or DEFAULT_THEME[name]
+    end
+    recompute()
+end
+resetTheme()
+
+local Binds = {}                       -- functions that (re)apply theme colours
+local function onTheme(fn) Binds[#Binds + 1] = fn; fn(); return fn end
+local function bindKey(obj, prop, key) onTheme(function() obj[prop] = C[key] end) end
+local function applyTheme() for _, fn in ipairs(Binds) do pcall(fn) end end
+
+function Library:SetTheme(name, color)
+    local key = THEME_KEYS[name]
+    if not key or typeof(color) ~= "Color3" then return end
+    C[key] = color
+    recompute()
+    applyTheme()
+end
+
+function Library:GetTheme(name)
+    local key = THEME_KEYS[name]
+    return key and C[key]
+end
+
+-- ============================================================
+-- LAYOUT (base px, measured from the screenshot)
+-- ============================================================
 local WIN_W, WIN_H     = 555, 344
 local PANEL_Y, PANEL_H = 53, 246
 local LEFT_X,  LEFT_W  = 14, 261
 local RIGHT_X, RIGHT_W = 287, 252
-local PAD, WIDGET_GAP  = 10, 8        -- side padding / gap between widgets
+local PAD, WIDGET_GAP  = 10, 8         -- side padding / gap between widgets
 local ROW_H, MAX_ROWS  = 15, 6
 
 -- ============================================================
@@ -150,16 +200,15 @@ local function new(class, props, parent)
     return o
 end
 
-local function stroke(parent, color)
-    return new("UIStroke", {
-        Color = color, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-    }, parent)
+-- colour is a theme key ("BoxStroke", "Border") or a fixed Color3
+local function stroke(parent, c)
+    local st = new("UIStroke", { Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, parent)
+    if type(c) == "string" then bindKey(st, "Color", c) else st.Color = c end
+    return st
 end
 
 local function fadeStroke(parent)
-    local st = new("UIStroke", {
-        Color = C.Border, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-    }, parent)
+    local st = stroke(parent, "Border")
     new("UIGradient", {
         Rotation = 90,
         Transparency = NumberSequence.new({
@@ -174,12 +223,12 @@ end
 
 local function textStroke(textObj)
     return new("UIStroke", {
-        Color = Color3.new(0, 0, 0), Thickness = 1,
-        ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
+        Color = BLACK, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
     }, textObj)
 end
 
-local function label(parent, text, x, y, w, h, align)
+-- colorKey: theme key for the text colour (default "Text"); false = the widget colours it itself
+local function label(parent, text, x, y, w, h, align, colorKey)
     local l = new("TextLabel", {
         FontFace = Font_Main, Text = text, TextSize = TEXT_SIZE, TextColor3 = C.Text,
         BackgroundTransparency = 1, BorderSizePixel = 0,
@@ -188,17 +237,19 @@ local function label(parent, text, x, y, w, h, align)
         TextYAlignment = Enum.TextYAlignment.Center,
     }, parent)
     textStroke(l)
+    if colorKey ~= false then bindKey(l, "TextColor3", colorKey or "Text") end
     return l
 end
 
-local function gradient(parent, top, bottom)
-    new("UIGradient", {
-        Rotation = 90,
-        Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0, top),
-            ColorSequenceKeypoint.new(1, bottom),
-        }),
-    }, parent)
+local function gradient(parent, topKey, bottomKey)
+    local g = new("UIGradient", { Rotation = 90 }, parent)
+    onTheme(function()
+        g.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, C[topKey]),
+            ColorSequenceKeypoint.new(1, C[bottomKey]),
+        })
+    end)
+    return g
 end
 
 local function tween(obj, props, t)
@@ -210,9 +261,9 @@ local function isPress(input)
         or input.UserInputType == Enum.UserInputType.Touch
 end
 
--- Pointer position in the same space as AbsolutePosition. Depending on the executor, GUI
--- space is either window space or window space minus the top-bar inset; every press on a
--- short object (swatch, title bar) calibrates MouseDY so we never have to assume.
+-- Pointer position in the same space as AbsolutePosition. Depending on the executor GUI
+-- space is window space or window space minus the top-bar inset; every press on a short
+-- object (swatch, title bar) calibrates MouseDY, so nothing is assumed.
 local MouseDY = 0
 
 local function rawPointer(input)
@@ -240,7 +291,8 @@ local function calibrate(obj, input)
     end
 end
 
-local function darkBox(parent, x, y, w, h, class, z)
+-- dark 1px-outlined box. bgKey: theme key for the fill (default "BoxOff"), false = widget handles it
+local function darkBox(parent, x, y, w, h, class, z, bgKey)
     local f = new(class or "Frame", {
         Position = UDim2.new(0, s(x), 0, s(y)), Size = UDim2.new(0, s(w), 0, s(h)),
         BackgroundColor3 = C.BoxOff, BorderSizePixel = 0, ZIndex = z or 1,
@@ -249,20 +301,22 @@ local function darkBox(parent, x, y, w, h, class, z)
         f.Text = ""
         f.AutoButtonColor = false
     end
-    stroke(f, C.BoxStroke)
+    if bgKey ~= false then bindKey(f, "BackgroundColor3", bgKey or "BoxOff") end
+    stroke(f, "BoxStroke")
     return f
 end
 
 local function makePanel(parent, x, y, w, h)
     local p = new("Frame", {
         Position = UDim2.new(0, s(x), 0, s(y)), Size = UDim2.new(0, s(w), 0, s(h)),
-        BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+        BackgroundColor3 = WHITE, BorderSizePixel = 0,
     }, parent)
-    gradient(p, C.PanelTop, C.PanelBot)
+    gradient(p, "PanelTop", "PanelBot")
     fadeStroke(p)
-    new("Frame", {
-        Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = C.Accent, BorderSizePixel = 0, ZIndex = 2,
+    local line = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 1), BorderSizePixel = 0, ZIndex = 2,
     }, p)
+    bindKey(line, "BackgroundColor3", "Accent")
     return p
 end
 
@@ -316,7 +370,7 @@ local function makeArrow(parent)
     for i, wpx in ipairs(widths) do
         rows[i] = new("Frame", {
             Size = UDim2.new(0, wpx, 0, 1), AnchorPoint = Vector2.new(0.5, 0),
-            BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 2,
+            BackgroundColor3 = WHITE, BorderSizePixel = 0, ZIndex = 2,
         }, parent)
     end
     return function(up)
@@ -340,47 +394,49 @@ local function buildToggle(parent, o)
     }, parent)
     local box = new("Frame", {
         Position = UDim2.new(0, 0, 0, s(3)), Size = UDim2.new(0, s(8), 0, s(8)),
-        BackgroundColor3 = state and C.Accent or C.Field, BorderSizePixel = 0,
+        BorderSizePixel = 0,
     }, row)
-    stroke(box, C.BoxStroke)
-    label(row, o.Text, 13, -1, o.W - 13, 15)   -- -1 offset: centered next to the box
+    stroke(box, "BoxStroke")
+    label(row, o.Text, 13, -1, o.W - 13, 15)   -- -1 offset: centred next to the box
 
-    local obj = {}
+    local function paint() box.BackgroundColor3 = state and C.Accent or C.Field end
+    onTheme(paint)
+
     local function set(v, silent)
         state = v and true or false
         Flags[flag] = state
-        box.BackgroundColor3 = state and C.Accent or C.Field
+        paint()
         if not silent and o.Callback then pcall(o.Callback, state) end
     end
     Flags[flag] = state
     row.MouseButton1Click:Connect(function() set(not state) end)
 
-    obj.Set = function(_, v) set(v) end
-    obj.Get = function() return state end
-    return register(flag, obj)
+    return register(flag, { Set = function(_, v) set(v) end, Get = function() return state end })
 end
 
 local function buildButton(parent, o)
-    local b = darkBox(parent, o.X, o.Y, o.W, 15, "TextButton")
+    local b = darkBox(parent, o.X, o.Y, o.W, 15, "TextButton", nil, false)
     local bStroke = b:FindFirstChildOfClass("UIStroke")
-    b.BackgroundColor3 = BTN_BG
     label(b, o.Text, 0, 0, o.W, 15, Enum.TextXAlignment.Center)
 
-    local blockedPress = false
+    local hovered, down, blockedPress = false, false, false
+    local function paint()
+        b.BackgroundColor3 = down and C.ButtonDown or (hovered and C.ButtonHover or C.Button)
+        bStroke.Color = down and C.Accent or C.BoxStroke
+    end
+    onTheme(paint)
+
     b.MouseEnter:Connect(function()
         if Active then return end
-        b.BackgroundColor3 = BTN_HOVER
+        hovered = true; paint()
     end)
-    b.MouseLeave:Connect(function() b.BackgroundColor3 = BTN_BG; bStroke.Color = C.BoxStroke end)
+    b.MouseLeave:Connect(function() hovered, down = false, false; paint() end)
     b.MouseButton1Down:Connect(function()
         blockedPress = Active ~= nil
         if blockedPress then return end
-        b.BackgroundColor3 = BTN_DOWN; bStroke.Color = C.Accent
+        down = true; paint()
     end)
-    b.MouseButton1Up:Connect(function()
-        if Active then return end
-        b.BackgroundColor3 = BTN_HOVER; bStroke.Color = C.BoxStroke
-    end)
+    b.MouseButton1Up:Connect(function() down = false; paint() end)
     b.MouseButton1Click:Connect(function()
         if blockedPress then blockedPress = false; return end
         if o.Callback then pcall(o.Callback) end
@@ -402,12 +458,10 @@ local function buildSlider(parent, o)
     local fmt = "%." .. decimals .. "f"
 
     label(parent, o.Text, o.X, o.Y, o.W - 60, 12)
-    local valLbl = label(parent, "", o.X + o.W - 60, o.Y, 60, 12, Enum.TextXAlignment.Right)
+    local valLbl = label(parent, "", o.X + o.W - 60, o.Y, 60, 12, Enum.TextXAlignment.Right, false)
 
-    local track_ = darkBox(parent, o.X, o.Y + 14, o.W, 10)
-    local fill = new("Frame", {
-        Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = C.Accent, BorderSizePixel = 0,
-    }, track_)
+    local bar = darkBox(parent, o.X, o.Y + 14, o.W, 10)
+    local fill = new("Frame", { Size = UDim2.new(0, 0, 1, 0), BorderSizePixel = 0 }, bar)
 
     local hit = new("TextButton", {
         Position = UDim2.new(0, s(o.X), 0, s(o.Y)), Size = UDim2.new(0, s(o.W), 0, s(26)),
@@ -416,6 +470,16 @@ local function buildSlider(parent, o)
 
     local value = min
     local dragging, hovering, dragInput, fine = false, false, nil, nil
+
+    local function fillColor()
+        return dragging and C.AccentLight or (hovering and C.AccentHover or C.Accent)
+    end
+    local function paint(animate)
+        if animate then tween(fill, { BackgroundColor3 = fillColor() }, 0.08)
+        else fill.BackgroundColor3 = fillColor() end
+        valLbl.TextColor3 = dragging and C.AccentLight or C.Text
+    end
+    onTheme(function() paint(false) end)
 
     local function snap(v)
         v = math.clamp(v, min, max)
@@ -431,12 +495,6 @@ local function buildSlider(parent, o)
         if not silent and o.Callback then pcall(o.Callback, value) end
     end
 
-    local function paint()
-        local c = dragging and ACCENT_LIGHT or (hovering and ACCENT_HOVER or C.Accent)
-        tween(fill, { BackgroundColor3 = c }, 0.08)
-        valLbl.TextColor3 = dragging and ACCENT_LIGHT or C.Text
-    end
-
     local function pointerX()
         if dragInput and dragInput.UserInputType == Enum.UserInputType.Touch then
             return dragInput.Position.X
@@ -446,19 +504,19 @@ local function buildSlider(parent, o)
 
     local function stepDrag()
         local x = pointerX()
-        local width = math.max(track_.AbsoluteSize.X, 1)
+        local width = math.max(bar.AbsoluteSize.X, 1)
         if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
             if not fine then fine = { x = x, v = value } end
             set(fine.v + (x - fine.x) / width * (max - min) * 0.2)
         else
             fine = nil
-            set(min + (max - min) * math.clamp((x - track_.AbsolutePosition.X) / width, 0, 1))
+            set(min + (max - min) * math.clamp((x - bar.AbsolutePosition.X) / width, 0, 1))
         end
     end
 
     local function stop()
         dragging, dragInput, fine = false, nil, nil
-        paint()
+        paint(true)
     end
 
     set(o.Default or min, true)
@@ -467,12 +525,12 @@ local function buildSlider(parent, o)
         if Active then return end
         if isPress(input) then
             dragging, dragInput, fine = true, input, nil
-            paint()
+            paint(true)
             stepDrag()
         end
     end)
-    hit.MouseEnter:Connect(function() if Active then return end; hovering = true; paint() end)
-    hit.MouseLeave:Connect(function() hovering = false; paint() end)
+    hit.MouseEnter:Connect(function() if Active then return end; hovering = true; paint(true) end)
+    hit.MouseLeave:Connect(function() hovering = false; paint(true) end)
 
     track(UserInputService.InputEnded:Connect(function(input)
         if dragging and isPress(input) then stop() end
@@ -500,40 +558,41 @@ local function buildDropdown(parent, o)
     local flag = o.Flag or o.Text
     local options = o.Options or {}
     local current = nil
-    local isOpen = false
+    local isOpen, hovered = false, false
+    local optLabels, optRows = {}, {}
 
     label(parent, o.Text, o.X, o.Y, w, 12)
 
-    local box = darkBox(parent, o.X, o.Y + 14, w, ROW_H, "TextButton", 40)
-    box.BackgroundColor3 = DD_BG
+    local box = darkBox(parent, o.X, o.Y + 14, w, ROW_H, "TextButton", 40, false)
     local valueLbl = label(box, "", 6, 0, w - 24, ROW_H)
     local setArrow = makeArrow(box)
     setArrow(true)
 
     local list = new("ScrollingFrame", {
         Position = UDim2.new(0, 0, 1, s(2)), Size = UDim2.new(1, 0, 0, 0),
-        BackgroundColor3 = DD_LIST, BorderSizePixel = 0,
-        Visible = false, ZIndex = 10, ClipsDescendants = true, Active = true,
+        BorderSizePixel = 0, Visible = false, ZIndex = 10, ClipsDescendants = true, Active = true,
         CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        ScrollingDirection = Enum.ScrollingDirection.Y,
-        ScrollBarThickness = s(2), ScrollBarImageColor3 = C.Accent,
+        ScrollingDirection = Enum.ScrollingDirection.Y, ScrollBarThickness = s(2),
     }, box)
-    stroke(list, C.BoxStroke)
+    stroke(list, "BoxStroke")
     new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, list)
 
-    local optLabels = {}
-
-    local function refresh()
+    local function themePaint()
+        box.BackgroundColor3 = hovered and C.FieldHover or C.Field
+        list.BackgroundColor3 = C.FieldList
+        list.ScrollBarImageColor3 = C.Accent
         for name, l in pairs(optLabels) do
             l.TextColor3 = (name == current) and C.Accent or C.Text
         end
+        for _, r in pairs(optRows) do r.BackgroundColor3 = C.FieldRow end
     end
+    onTheme(themePaint)
 
     local function set(v, silent)
         current = v
         Flags[flag] = v
         valueLbl.Text = tostring(v)
-        refresh()
+        themePaint()
         if not silent and o.Callback then pcall(o.Callback, v) end
     end
 
@@ -544,6 +603,7 @@ local function buildDropdown(parent, o)
         if open == isOpen then return end
         isOpen = open
         setArrow(not open)
+        box.ZIndex = open and 85 or 40            -- above everything while open
         if open then
             list.Size = UDim2.new(1, 0, 0, fullHeight())
             list.Visible = true
@@ -562,15 +622,15 @@ local function buildDropdown(parent, o)
         for _, ch in ipairs(list:GetChildren()) do
             if ch:IsA("TextButton") then ch:Destroy() end
         end
-        optLabels = {}
+        optLabels, optRows = {}, {}
         for i, opt in ipairs(options) do
             local b = new("TextButton", {
                 LayoutOrder = i, Size = UDim2.new(1, 0, 0, s(ROW_H)),
-                BackgroundColor3 = DD_ROW_HOVER, BackgroundTransparency = 1,
-                BorderSizePixel = 0, Text = "", AutoButtonColor = false,
+                BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false,
             }, list)
             claim(b, handle)
-            optLabels[opt] = label(b, opt, 6, 0, w - 12, ROW_H)
+            optRows[opt] = b
+            optLabels[opt] = label(b, opt, 6, 0, w - 12, ROW_H, nil, false)
             b.MouseEnter:Connect(function() b.BackgroundTransparency = 0 end)
             b.MouseLeave:Connect(function() b.BackgroundTransparency = 1 end)
             b.MouseButton1Click:Connect(function()
@@ -578,11 +638,14 @@ local function buildDropdown(parent, o)
                 setOpen(false)
             end)
         end
-        refresh()
+        themePaint()
     end
 
-    box.MouseEnter:Connect(function() if Active and Active ~= handle then return end; box.BackgroundColor3 = DD_HOVER end)
-    box.MouseLeave:Connect(function() box.BackgroundColor3 = DD_BG end)
+    box.MouseEnter:Connect(function()
+        if Active and Active ~= handle then return end
+        hovered = true; themePaint()
+    end)
+    box.MouseLeave:Connect(function() hovered = false; themePaint() end)
     box.MouseButton1Click:Connect(function() setOpen(not isOpen) end)
 
     build()
@@ -602,13 +665,83 @@ local function buildDropdown(parent, o)
     })
 end
 
+-- scrolling list box (always visible, click an item to select it)
+local function buildListBox(parent, o)
+    local flag = o.Flag or o.Text
+    local rowsN = o.Rows or 5
+    local items = o.Items or {}
+    local current = nil
+    local rowBtns, rowLbls = {}, {}
+
+    label(parent, o.Text, o.X, o.Y, o.W, 12)
+    local box = darkBox(parent, o.X, o.Y + 14, o.W, rowsN * ROW_H, nil, nil, "Field")
+
+    local scroll = new("ScrollingFrame", {
+        Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
+        CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, Active = true,
+        ScrollingDirection = Enum.ScrollingDirection.Y, ScrollBarThickness = s(2),
+    }, box)
+    new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, scroll)
+
+    local function themePaint()
+        scroll.ScrollBarImageColor3 = C.Accent
+        for name, l in pairs(rowLbls) do
+            l.TextColor3 = (name == current) and C.Accent or C.Text
+        end
+        for _, b in pairs(rowBtns) do b.BackgroundColor3 = C.FieldRow end
+    end
+    onTheme(themePaint)
+
+    local function set(v, silent)
+        local found = false
+        for _, it in ipairs(items) do if it == v then found = true end end
+        current = found and v or nil
+        Flags[flag] = current or ""
+        themePaint()
+        if not silent and o.Callback then pcall(o.Callback, current) end
+    end
+
+    local function build()
+        for _, ch in ipairs(scroll:GetChildren()) do
+            if ch:IsA("TextButton") then ch:Destroy() end
+        end
+        rowBtns, rowLbls = {}, {}
+        for i, it in ipairs(items) do
+            local b = new("TextButton", {
+                LayoutOrder = i, Size = UDim2.new(1, 0, 0, s(ROW_H)),
+                BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false,
+            }, scroll)
+            rowBtns[it] = b
+            rowLbls[it] = label(b, it, 6, 0, o.W - 12, ROW_H, nil, false)
+            b.MouseEnter:Connect(function() b.BackgroundTransparency = 0 end)
+            b.MouseLeave:Connect(function() b.BackgroundTransparency = 1 end)
+            b.MouseButton1Click:Connect(function() set(it) end)
+        end
+        themePaint()
+    end
+
+    build()
+    set(o.Default, true)
+
+    return register(flag, {
+        Set = function(_, v) set(v) end,
+        Get = function() return current end,
+        SetItems = function(_, newItems)
+            items = newItems
+            build()
+            set(current, true)
+        end,
+    })
+end
+
 local function buildInput(parent, o)
     local flag = o.Flag or o.Text
     label(parent, o.Text, o.X, o.Y, o.W, 12)
 
-    local box = darkBox(parent, o.X, o.Y + 14, o.W, 15)
-    box.BackgroundColor3 = C.Field
+    local box = darkBox(parent, o.X, o.Y + 14, o.W, 15, nil, nil, "Field")
     local boxStroke = box:FindFirstChildOfClass("UIStroke")
+    local focused = false
+    onTheme(function() boxStroke.Color = focused and C.Accent or C.BoxStroke end)
 
     local tb = new("TextBox", {
         Position = UDim2.new(0, s(5), 0, 0), Size = UDim2.new(1, -s(10), 1, 0),
@@ -619,13 +752,16 @@ local function buildInput(parent, o)
         TextXAlignment = Enum.TextXAlignment.Left,
     }, box)
     textStroke(tb)
+    bindKey(tb, "TextColor3", "Text")
 
     Flags[flag] = tb.Text
     tb.Focused:Connect(function()
         if Active then tb:ReleaseFocus(); return end
+        focused = true
         boxStroke.Color = C.Accent
     end)
     tb.FocusLost:Connect(function(enterPressed)
+        focused = false
         boxStroke.Color = C.BoxStroke
         Flags[flag] = tb.Text
         if o.Callback then pcall(o.Callback, tb.Text, enterPressed) end
@@ -651,7 +787,6 @@ local function buildKeybind(parent, o)
 
     local function show()
         lbl.Text = (key == Enum.KeyCode.Unknown) and "[NONE]" or ("[" .. string.upper(key.Name) .. "]")
-        lbl.TextColor3 = C.Text
     end
     Flags[flag] = key.Name
     show()
@@ -688,12 +823,13 @@ local function buildKeybind(parent, o)
             key = v
             Flags[flag] = key.Name
             show()
+            if o.Changed then pcall(o.Changed, key) end
         end,
     })
 end
 
 local function buildColorPicker(parent, o)
-    local PW, PH = 164, 124           -- popup size (base px)
+    local PW, PH = 164, 124            -- popup size (base px)
     local PADI, GAP, HUE_W = 8, 8, 9
     local flag = o.Flag or o.Text
     local color = o.Default or C.Accent
@@ -709,17 +845,18 @@ local function buildColorPicker(parent, o)
         Position = UDim2.new(1, -s(16), 0, s(3)), Size = UDim2.new(0, s(16), 0, s(9)),
         BackgroundColor3 = color, BorderSizePixel = 0, Text = "", AutoButtonColor = false,
     }, holder)
-    stroke(swatch, C.BoxStroke)
+    stroke(swatch, "BoxStroke")
     swatch.InputBegan:Connect(function(input)
         if isPress(input) then calibrate(swatch, input) end
     end)
 
     local popup = new("TextButton", {
         Position = UDim2.new(1, -s(PW), 0, s(18)), Size = UDim2.new(0, s(PW), 0, s(PH)),
-        BackgroundColor3 = C.PanelBot, BorderSizePixel = 0, Visible = false,
-        ZIndex = 60, Active = true, Text = "", AutoButtonColor = false,
+        BorderSizePixel = 0, Visible = false, ZIndex = 60, Active = true,
+        Text = "", AutoButtonColor = false,
     }, holder)
-    stroke(popup, C.BoxStroke)
+    bindKey(popup, "BackgroundColor3", "PanelBot")
+    stroke(popup, "BoxStroke")
 
     local innerH = PH - PADI * 2
     local svW = PW - PADI * 2 - GAP - HUE_W
@@ -728,17 +865,17 @@ local function buildColorPicker(parent, o)
         Position = UDim2.new(0, s(PADI), 0, s(PADI)), Size = UDim2.new(0, s(svW), 0, s(innerH)),
         BackgroundColor3 = Color3.fromHSV(hue, 1, 1), BorderSizePixel = 0,
     }, popup)
-    stroke(sv, C.BoxStroke)
+    stroke(sv, "BoxStroke")
 
     local white = new("Frame", {
-        Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0,
     }, sv)
     new("UIGradient", {
         Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
     }, white)
 
     local black = new("Frame", {
-        Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = BLACK, BorderSizePixel = 0,
     }, sv)
     new("UIGradient", {
         Rotation = 90,
@@ -749,11 +886,9 @@ local function buildColorPicker(parent, o)
     local function squareMarker(p)
         local m = new("Frame", {
             AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(0, 2, 0, 2),
-            BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 3,
+            BackgroundColor3 = WHITE, BorderSizePixel = 0, ZIndex = 3,
         }, p)
-        new("UIStroke", {
-            Color = Color3.new(0, 0, 0), Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-        }, m)
+        new("UIStroke", { Color = BLACK, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, m)
         return m
     end
     local svMark = squareMarker(sv)
@@ -764,9 +899,9 @@ local function buildColorPicker(parent, o)
 
     local hueBar = new("Frame", {
         Position = UDim2.new(0, s(PADI + svW + GAP), 0, s(PADI)), Size = UDim2.new(0, s(HUE_W), 0, s(innerH)),
-        BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+        BackgroundColor3 = WHITE, BorderSizePixel = 0,
     }, popup)
-    stroke(hueBar, C.BoxStroke)
+    stroke(hueBar, "BoxStroke")
 
     local keypoints = {}
     for i = 0, 6 do
@@ -829,6 +964,7 @@ local function buildColorPicker(parent, o)
     local function setOpen(open)
         isOpen = open
         popup.Visible = open
+        holder.ZIndex = open and 90 or 50          -- open picker draws over the pickers below it
         if not open then mode, dragInput = nil, nil end
         if open then setActive(handle) elseif Active == handle then Active = nil end
     end
@@ -842,7 +978,7 @@ local function buildColorPicker(parent, o)
     return register(flag, {
         Get = function() return color end,
         Set = function(_, c)
-            if typeof(c) == "table" then c = Color3.new(c.r or c.R or 0, c.g or c.G or 0, c.b or c.B or 0) end
+            if typeof(c) == "table" then c = Color3.new(c.r or 0, c.g or 0, c.b or 0) end
             hue, sat, val = c:ToHSV()
             apply()
         end,
@@ -852,12 +988,21 @@ end
 -- ============================================================
 -- TAB STRIP (incremental: tabs can be added one by one)
 -- ============================================================
-local function newTabStrip(parent, x, y, w, h, activeColor, onSelect)
+local function newTabStrip(parent, x, y, w, h, activeGetter, onSelect)
     local strip = new("Frame", {
         Position = UDim2.new(0, s(x), 0, s(y)), Size = UDim2.new(0, s(w), 0, s(h)),
-        BackgroundColor3 = C.TabOff, BorderSizePixel = 0,
+        BorderSizePixel = 0,
     }, parent)
+    bindKey(strip, "BackgroundColor3", "TabOff")
     local self = { Frame = strip, Buttons = {}, Selected = 0 }
+
+    local function paint()
+        for j, b in ipairs(self.Buttons) do
+            -- the active tab takes the colour of the frame it sits on, so it looks connected
+            b.BackgroundColor3 = (j == self.Selected) and activeGetter() or C.TabOff
+        end
+    end
+    onTheme(paint)
 
     local function layout()
         local n = #self.Buttons
@@ -869,24 +1014,22 @@ local function newTabStrip(parent, x, y, w, h, activeColor, onSelect)
 
     function self:Select(i)
         self.Selected = i
-        for j, b in ipairs(self.Buttons) do
-            -- active tab takes the colour of the frame it sits on, so it looks connected
-            b.BackgroundColor3 = (j == i) and activeColor or C.TabOff
-        end
+        paint()
         onSelect(i)
     end
 
     function self:Add(name)
         local b = new("TextButton", {
-            BackgroundColor3 = C.TabOff, BorderSizePixel = 0, AutoButtonColor = false,
+            BorderSizePixel = 0, AutoButtonColor = false,
             FontFace = Font_Main, Text = name, TextSize = TEXT_SIZE, TextColor3 = C.Text,
         }, strip)
         textStroke(b)
+        bindKey(b, "TextColor3", "Text")
         local i = #self.Buttons + 1
         self.Buttons[i] = b
         b.MouseButton1Click:Connect(function() self:Select(i) end)
         layout()
-        if i == 1 then self:Select(1) end
+        if i == 1 then self:Select(1) else paint() end
         return i
     end
 
@@ -926,6 +1069,107 @@ function Container:AddInput(o)       return buildInput(self.Content,       place
 function Container:AddKeybind(o)     return buildKeybind(self.Content,     placed(self, "keybind",  15, o)) end
 function Container:AddColorPicker(o) return buildColorPicker(self.Content, placed(self, "color",    15, o)) end
 
+function Container:AddListBox(o)
+    local rows = (type(o) == "table" and o.Rows) or 5
+    return buildListBox(self.Content, placed(self, "list", 14 + rows * ROW_H, o))
+end
+
+-- several buttons side by side: AddButtonRow({ {Text=, Callback=}, {Text=, Callback=} })
+function Container:AddButtonRow(list)
+    local p = placed(self, "button", 15, {})
+    local n, gap = #list, 4
+    local bw = (p.W - gap * (n - 1)) / n
+    local out = {}
+    for i, def in ipairs(list) do
+        out[i] = buildButton(self.Content, {
+            X = p.X + (i - 1) * (bw + gap), Y = p.Y, W = bw, Text = def.Text, Callback = def.Callback,
+        })
+    end
+    return out
+end
+
+-- ---------- ready-made blocks ----------
+function Container:AddUnloadButton(text)
+    return self:AddButton({ Text = text or "Unload menu", Callback = function() Library:Unload() end })
+end
+
+function Container:AddMenuKeybind(text)
+    return self:AddKeybind({
+        Text = text or "Menu key", Flag = "menu_key",
+        Default = WindowObj and WindowObj.ToggleKey or Enum.KeyCode.RightShift,
+        Changed = function(key)
+            if WindowObj then
+                WindowObj.ToggleKey = (key ~= Enum.KeyCode.Unknown) and key or Enum.KeyCode.RightShift
+            end
+        end,
+    })
+end
+
+local THEME_LABELS = {
+    Accent = "Accent color", Background = "Background", Panel = "Panel",
+    Field = "Field", Text = "Text", Outline = "Outline",
+}
+
+function Container:AddThemePickers(names)
+    local out = {}
+    for _, name in ipairs(names or Library.ThemeNames) do
+        out[name] = self:AddColorPicker({
+            Text = THEME_LABELS[name] or name, Flag = "theme_" .. string.lower(name),
+            Default = Library:GetTheme(name),
+            Callback = function(c) Library:SetTheme(name, c) end,
+        })
+    end
+    return out
+end
+
+function Container:AddConfigSystem()
+    local nameInput = self:AddInput({ Text = "Config name", Flag = "__cfg_name", Placeholder = "type a name..." })
+    local list = self:AddListBox({ Text = "Configs", Flag = "__cfg_list", Items = Library:ListConfigs(), Rows = 5 })
+    local status
+
+    local function say(msg) if status then status:SetText(msg) end end
+    local function refresh(select)
+        list:SetItems(Library:ListConfigs())
+        if select then list:Set(select) end
+    end
+    local function selected()
+        local n = list:Get()
+        if not n or n == "" then say("select a config first") return nil end
+        return n
+    end
+
+    self:AddButtonRow({
+        { Text = "Create", Callback = function()
+            local n = (nameInput:Get():gsub("[^%w%-_ ]", "")):match("^%s*(.-)%s*$")
+            if n == "" then say("type a name first") return end
+            if Library:SaveConfig(n) then refresh(n); say("created " .. n) else say("could not save") end
+        end },
+        { Text = "Load", Callback = function()
+            local n = selected(); if not n then return end
+            say(Library:LoadConfig(n) and ("loaded " .. n) or "could not load")
+        end },
+    })
+    self:AddButtonRow({
+        { Text = "Overwrite", Callback = function()
+            local n = selected(); if not n then return end
+            say(Library:SaveConfig(n) and ("saved " .. n) or "could not save")
+        end },
+        { Text = "Delete", Callback = function()
+            local n = selected(); if not n then return end
+            if Library:DeleteConfig(n) then refresh(); say("deleted " .. n) else say("could not delete") end
+        end },
+    })
+    self:AddButtonRow({
+        { Text = "Refresh", Callback = function() refresh(list:Get()); say("refreshed") end },
+        { Text = "Set autoload", Callback = function()
+            local n = selected(); if not n then return end
+            say(Library:SetAutoload(n) and ("autoload: " .. n) or "could not set autoload")
+        end },
+    })
+    status = self:AddLabel("")
+    return { Input = nameInput, List = list, Refresh = refresh }
+end
+
 -- ============================================================
 -- SECTION (panel with a title, or with sub-tabs)
 -- ============================================================
@@ -935,10 +1179,11 @@ Section.__index = Section
 function Section:AddSubTab(name)
     if not self.Strip then
         self.Title.Visible = false
-        local activeColor = C.PanelTop:Lerp(C.PanelBot, 13.5 / self.PanelH)
-        self.Strip = newTabStrip(self.Panel, 0, 3, self.PanelW, 21, activeColor, function(i)
-            for j, pg in ipairs(self.Pages) do pg.Visible = (j == i) end
-        end)
+        self.Strip = newTabStrip(self.Panel, 0, 3, self.PanelW, 21,
+            function() return C.PanelTop:Lerp(C.PanelBot, 13.5 / self.PanelH) end,
+            function(i)
+                for j, pg in ipairs(self.Pages) do pg.Visible = (j == i) end
+            end)
     end
 
     local page = new("Frame", {
@@ -994,6 +1239,18 @@ function Window:AddTab(name)
     return tab
 end
 
+-- ready-made settings tab: menu key + theme pickers + unload | config system
+function Window:AddSettingsTab(name)
+    local tab = self:AddTab(name or "Settings")
+    local menu = tab:AddSection("Menu", "Left")
+    menu:AddMenuKeybind("Menu key")
+    menu:AddThemePickers()
+    menu:AddUnloadButton("Unload menu")
+    local cfg = tab:AddSection("Configs", "Right")
+    cfg:AddConfigSystem()
+    return tab, menu, cfg
+end
+
 function Window:SetVisible(v)
     closeActive()
     self.Root.Visible = v and true or false
@@ -1012,10 +1269,10 @@ local function buildPreview(root)
     local preview = new("Frame", {
         Name = "Preview",
         Position = UDim2.new(1, s(PV_GAP), 0, 0), Size = UDim2.new(0, s(PV_W), 0, s(PV_H)),
-        BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+        BackgroundColor3 = WHITE, BorderSizePixel = 0,
     }, root)
-    gradient(preview, C.WinTop, C.WinBot)
-    stroke(preview, C.Border)
+    gradient(preview, "WinTop", "WinBot")
+    stroke(preview, "Border")
     label(preview, "preview", 6, 0, PV_W - 12, 22)
 
     local body = new("Frame", {
@@ -1023,16 +1280,17 @@ local function buildPreview(root)
         BackgroundTransparency = 1, BorderSizePixel = 0,
     }, preview)
     fadeStroke(body)
-    new("Frame", {
+    local line = new("Frame", {
         Position = UDim2.new(0, s(6), 0, s(22)), Size = UDim2.new(0, s(PV_W - 13), 0, 1),
-        BackgroundColor3 = C.Accent, BorderSizePixel = 0, ZIndex = 2,
+        BorderSizePixel = 0, ZIndex = 2,
     }, preview)
+    bindKey(line, "BackgroundColor3", "Accent")
 
     local panel = makePanel(preview, 14, 30, PV_W - 28, PV_H - 44)
     local viewport = new("ViewportFrame", {
         Position = UDim2.new(0, 0, 0, 1), Size = UDim2.new(1, 0, 1, -1),
         BackgroundTransparency = 1, BorderSizePixel = 0,
-        Ambient = Color3.fromRGB(190, 190, 190), LightColor = Color3.fromRGB(255, 255, 255),
+        Ambient = Color3.fromRGB(190, 190, 190), LightColor = WHITE,
         LightDirection = Vector3.new(0.3, -0.6, -1),
     }, panel)
     local cam = new("Camera", { FieldOfView = CAM_FOV }, viewport)
@@ -1101,9 +1359,7 @@ function Library:CreateWindow(cfg)
     SCALE     = cfg.Scale or 1.25
     TEXT_BASE = cfg.TextSize or 11
     TEXT_SIZE = s(TEXT_BASE)
-    C.Accent  = cfg.Accent or DEFAULT_ACCENT
-    ACCENT_LIGHT = C.Accent:Lerp(Color3.new(1, 1, 1), 0.25)
-    ACCENT_HOVER = C.Accent:Lerp(Color3.new(1, 1, 1), 0.12)
+    resetTheme(cfg.Theme or (cfg.Accent and { Accent = cfg.Accent }) or nil)
 
     local existing = GuiParent:FindFirstChild(GUI_NAME)
     if existing then existing:Destroy() end
@@ -1118,18 +1374,20 @@ function Library:CreateWindow(cfg)
     local root = new("Frame", {
         Name = "Window", Size = UDim2.new(0, W, 0, H),
         Position = UDim2.new(0.5, -W / 2, 0.5, -H / 2),
-        BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+        BackgroundColor3 = WHITE, BorderSizePixel = 0,
     }, Screen)
-    gradient(root, C.WinTop, C.WinBot)
-    stroke(root, C.Border)
+    gradient(root, "WinTop", "WinBot")
+    stroke(root, "Border")
 
     -- title
-    local dim = C.Accent:Lerp(Color3.new(0, 0, 0), 0.14)
     local titleLbl = label(root, "", 6, 0, 300, 22)
     titleLbl.RichText = true
-    titleLbl.Text = string.format('<font color="rgb(%d,%d,%d)">%s</font>',
-        math.floor(dim.R * 255 + 0.5), math.floor(dim.G * 255 + 0.5), math.floor(dim.B * 255 + 0.5),
-        cfg.Name or "Ketamine")
+    onTheme(function()
+        local d = C.AccentDim
+        titleLbl.Text = string.format('<font color="rgb(%d,%d,%d)">%s</font>',
+            math.floor(d.R * 255 + 0.5), math.floor(d.G * 255 + 0.5), math.floor(d.B * 255 + 0.5),
+            cfg.Name or "Ketamine")
+    end)
 
     -- outline + accent line
     local body = new("Frame", {
@@ -1137,19 +1395,22 @@ function Library:CreateWindow(cfg)
         BackgroundTransparency = 1, BorderSizePixel = 0,
     }, root)
     fadeStroke(body)
-    new("Frame", {
+    local line = new("Frame", {
         Position = UDim2.new(0, s(6), 0, s(22)), Size = UDim2.new(0, s(542), 0, 1),
-        BackgroundColor3 = C.Accent, BorderSizePixel = 0, ZIndex = 2,
+        BorderSizePixel = 0, ZIndex = 2,
     }, root)
+    bindKey(line, "BackgroundColor3", "Accent")
 
     local self = setmetatable({
         Screen = Screen, Root = root, Tabs = {}, ToggleKey = cfg.ToggleKey or Enum.KeyCode.RightShift,
     }, Window)
 
-    -- main tabs sit on the window body -> active tab = window colour at that height
-    self.Strip = newTabStrip(root, 7, 25, 540, 23, C.WinTop:Lerp(C.WinBot, 36.5 / WIN_H), function(i)
-        for j, t in ipairs(self.Tabs) do t.Page.Visible = (j == i) end
-    end)
+    -- main tabs sit on the window body -> the active tab = window colour at that height
+    self.Strip = newTabStrip(root, 7, 25, 540, 23,
+        function() return C.WinTop:Lerp(C.WinBot, 36.5 / WIN_H) end,
+        function(i)
+            for j, t in ipairs(self.Tabs) do t.Page.Visible = (j == i) end
+        end)
 
     if cfg.Preview ~= false then self.Preview = buildPreview(root) end
 
@@ -1192,10 +1453,15 @@ end
 -- ============================================================
 -- UNLOAD
 -- ============================================================
+function Library:OnUnload(fn) UnloadCallbacks[#UnloadCallbacks + 1] = fn end
+
 function Library:Unload()
     closeActive()
+    for _, fn in ipairs(UnloadCallbacks) do pcall(fn) end
+    table.clear(UnloadCallbacks)
     for _, c in ipairs(Conns) do pcall(function() c:Disconnect() end) end
     table.clear(Conns)
+    table.clear(Binds)
     if Screen then pcall(function() Screen:Destroy() end) end
     Screen, WindowObj, isListening = nil, nil, false
     table.clear(Options)
@@ -1203,28 +1469,48 @@ function Library:Unload()
 end
 
 -- ============================================================
--- CONFIGS  (Ketamine/Configs/<name>.json)
+-- CONFIGS  (<ConfigFolder>/<name>.json, autoload.txt remembers the autoload config)
 -- ============================================================
+local function fsReady() return writefile and readfile and isfile and isfolder and makefolder end
+
+local function ensureFolder()
+    if not fsReady() then return false end
+    for _, p in ipairs({ "Ketamine", Library.ConfigFolder }) do
+        if not isfolder(p) then makefolder(p) end
+    end
+    return true
+end
+
 local function encode(v)
-    local t = typeof(v)
-    if t == "Color3" then return { __t = "c3", r = v.R, g = v.G, b = v.B } end
+    if typeof(v) == "Color3" then return { __t = "c3", r = v.R, g = v.G, b = v.B } end
     return v
 end
 
-function Library:SaveConfig(name)
-    if not (writefile and makefolder and isfolder) then return false end
-    for _, p in ipairs({ "Ketamine", "Ketamine/Configs" }) do
-        if not isfolder(p) then makefolder(p) end
-    end
+function Library:ListConfigs()
     local out = {}
-    for flag, v in pairs(Flags) do out[flag] = encode(v) end
-    local ok = pcall(writefile, "Ketamine/Configs/" .. name .. ".json", HttpService:JSONEncode(out))
-    return ok
+    if not (listfiles and isfolder and isfolder(Library.ConfigFolder)) then return out end
+    local ok, files = pcall(listfiles, Library.ConfigFolder)
+    if not ok then return out end
+    for _, f in ipairs(files) do
+        local name = tostring(f):match("([^/\\]+)%.json$")
+        if name then out[#out + 1] = name end
+    end
+    table.sort(out)
+    return out
+end
+
+function Library:SaveConfig(name)
+    if not name or name == "" or not ensureFolder() then return false end
+    local out = {}
+    for flag, v in pairs(Flags) do
+        if string.sub(flag, 1, 2) ~= "__" then out[flag] = encode(v) end   -- "__" flags are UI-only
+    end
+    return (pcall(writefile, Library.ConfigFolder .. "/" .. name .. ".json", HttpService:JSONEncode(out)))
 end
 
 function Library:LoadConfig(name)
-    if not (readfile and isfile) then return false end
-    local path = "Ketamine/Configs/" .. name .. ".json"
+    if not name or not fsReady() then return false end
+    local path = Library.ConfigFolder .. "/" .. name .. ".json"
     if not isfile(path) then return false end
     local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
     if not ok or type(data) ~= "table" then return false end
@@ -1236,6 +1522,27 @@ function Library:LoadConfig(name)
         end
     end
     return true
+end
+
+function Library:DeleteConfig(name)
+    if not name or not (delfile and isfile) then return false end
+    local path = Library.ConfigFolder .. "/" .. name .. ".json"
+    if not isfile(path) then return false end
+    return (pcall(delfile, path))
+end
+
+function Library:SetAutoload(name)
+    if not name or not ensureFolder() then return false end
+    return (pcall(writefile, Library.ConfigFolder .. "/autoload.txt", name))
+end
+
+function Library:LoadAutoload()
+    if not fsReady() then return false end
+    local path = Library.ConfigFolder .. "/autoload.txt"
+    if not isfile(path) then return false end
+    local ok, name = pcall(readfile, path)
+    if not ok or name == "" then return false end
+    return Library:LoadConfig(name)
 end
 
 return Library
